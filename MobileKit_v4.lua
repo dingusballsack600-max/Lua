@@ -22,6 +22,53 @@ local lp           = Players.LocalPlayer
 
 local ENV = getfenv and getfenv() or {}
 
+-- bit32 polyfill for executors / Luau contexts where it's absent
+if not bit32 then
+    bit32 = {
+        bxor = function(a, b)
+            local r, m = 0, 1
+            for _ = 1, 32 do
+                local ra, rb = a % 2, b % 2
+                if ra ~= rb then r = r + m end
+                a, b, m = (a - ra) / 2, (b - rb) / 2, m * 2
+            end
+            return r
+        end,
+        band = function(a, b)
+            local r, m = 0, 1
+            for _ = 1, 32 do
+                local ra, rb = a % 2, b % 2
+                if ra == 1 and rb == 1 then r = r + m end
+                a, b, m = (a - ra) / 2, (b - rb) / 2, m * 2
+            end
+            return r
+        end,
+        bor = function(a, b)
+            local r, m = 0, 1
+            for _ = 1, 32 do
+                local ra, rb = a % 2, b % 2
+                if ra == 1 or rb == 1 then r = r + m end
+                a, b, m = (a - ra) / 2, (b - rb) / 2, m * 2
+            end
+            return r
+        end,
+        rshift = function(a, n) return math.floor(a / 2^n) end,
+        lshift = function(a, n) return a * 2^n end,
+    }
+end
+
+-- task polyfill for executors that don't expose it
+if not task then
+    task = {
+        spawn  = function(f, ...) return coroutine.wrap(f)(...) end,
+        delay  = function(t, f, ...) 
+            local args = {...}
+            spawn(function() wait(t); f(table.unpack(args)) end)
+        end,
+        wait   = wait or function(n) return wait(n) end,
+    }
+end
+
 -- Primary decompile function (UNC standard: decompile(script) -> string)
 -- Fallbacks: syn.decompile, syn_decompile, getscriptbytecode (raw bytecode)
 local function getDecompiler()
@@ -1121,10 +1168,7 @@ local function startLoadstringHook(cb)
         local genv = ENV.getgenv()
         if genv then rawset(genv, "loadstring", hookedLS) end
     end
-    -- also set in executor env
-    if setfenv then
-        pcall(setfenv, 0, setmetatable({loadstring=hookedLS},{__index=ENV}))
-    end
+    -- Note: setfenv(0,...) intentionally omitted — crashes on most executors
 end
 
 local function stopLoadstringHook()
@@ -1465,6 +1509,15 @@ end
 -- ============================================================
 --  GUI CONSTRUCTION
 -- ============================================================
+
+-- Wait for LocalPlayer if needed (executor may run before player loads)
+if not lp then
+    lp = Players.LocalPlayer
+    if not lp then
+        lp = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+        lp = Players.LocalPlayer
+    end
+end
 
 if lp.PlayerGui:FindFirstChild("MobileKit") then
     lp.PlayerGui.MobileKit:Destroy()
